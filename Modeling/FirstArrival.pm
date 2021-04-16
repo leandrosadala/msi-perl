@@ -10,12 +10,12 @@ use MCE::Map;
 use Exporter;
 
 our @ISA = qw(Exporter);
-our @EXPORT_OK = qw(build_curves);
+our @EXPORT_OK = qw();
 
 
 sub new {
 	my ($class,@args) = @_;
-	return bless {$args[0],$args[1]},$class;
+	return bless {v=>$args[0],t=>$args[1]},$class;
 }
 
 sub step_backward {
@@ -81,7 +81,7 @@ sub compute_amplitude {
 	return 1e3/($l*sqrt($l));
 }
 
-sub build_curves {
+sub build {
 	my ($self,$s,$r) = @_;
 	my $time = [map { $$self{t}->evaluate($$_[0],$$_[1]) } @$r];
 	my $ampl = [mce_map { $self->compute_amplitude($$r[$_],$$time[$_]) } 0..$#$r];
