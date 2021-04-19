@@ -12,7 +12,9 @@ Creates json input file for msi application
 
 =head1 SYNOPSIS
 
-msi-input-creation -m=MODEL -b=BOUNDS -i=INCREMENTS -o=OUTPUT [-l=LEVEL]
+msi-input-creation -m MODEL -b BOUNDS -i INCREMENTS -o OUTPUT 
+
+                   [-l LEVEL] [-j JOBS]
 
 =head1 REQUIREMENTS
 
@@ -40,9 +42,13 @@ json created file
 
 =over 4
 
-=item B<-l,-level>
+=item B<-l,--level>
 
 registration level of the records
+
+=item B<-j,--jobs>
+
+no of concurrent processes
 
 =back
 
@@ -52,17 +58,21 @@ registration level of the records
 
 =item registration level set to the lower depth model bound
 
-msi-input-creation -m=model.json -b=0,10000,0,2000 -i=10,10
+msi-input-creation -m model.json -b 0,10000,0,2000 -i 10,10
 
 =item registration level set to a given depth
 
-msi-input-creation -m=model.json -b=0,10000,0,2000 -i=10,10 -l=10
+msi-input-creation -m model.json -b 0,10000,0,2000 -i 10,10 -l 10
+
+=item registration level set to a given depth with 4 jobs
+
+msi-input-creation -m model.json -b 0,10000,0,2000 -i 10,10 -l 10 -j 4
 
 =back
 
 =head1 CREDITS
 
-Leandro Sadala,L<leandrosadala@petrobras.com.br>
+Leandro Sadala,L<<leandrosadala@petrobras.com.br>>
 
 =cut
 
@@ -74,6 +84,33 @@ use File::Basename;
 use Modeling::FirstArrival;
 use Getopt::Long qw(GetOptions);
 use Pod::Usage qw(pod2usage);
+use MCE::Map;
+use Data::Dump qw(pp);
+
+sub construct_curves {
+	my ($index,$image,$model,$level) = @_;
+	
+    my $ix = int($index/$$image{shape}[1]);
+    my $iz = $index % $$image{shape}[1];
+    
+    my $source = [$$image{bounds}[0]+$$image{increments}[0]*$ix,
+            $$image{bounds}[2]+$$image{increments}[1]*$iz];
+    
+    my $es = new Modeling::Eikonal($model);
+    $es->solve($source);
+    
+    $$model{t} = new BSplines::Surface($$model{x},$$model{z},$$model{time},$$model{shape}[0],$$model{shape}[1],3,3);
+    my $fstarr = new Modeling::FirstArrival($$model{v},$$model{t});
+    
+    my $receivers = [map { [$_,$level] } @{$$model{x}}];
+    
+    my @curves = $fstarr->build($source,$receivers);
+    
+    print ">> first arrival of source ($$source[0] m,$$source[1] m) built <<\n";
+
+	return \@curves;
+	
+}
 
 sub main {
   
@@ -84,9 +121,10 @@ sub main {
       'output' => undef,
       'increments' => undef,
       'level' => undef,
+      'jobs' => 1,
     };
   GetOptions($options,'help|h!','model|m=s','bounds|b=s',
-      'output|o=s','increments|i=s','level|l=f');
+      'output|o=s','increments|i=s','level|l=f','jobs|j=i');
   pod2usage(-exitval => 0, -verbose => 2) if $$options{help};
   pod2usage(-exitval => 1, -verbose => 1) unless ($$options{model} 
       and $$options{bounds} and $$options{output} or $$options{increments});
@@ -99,20 +137,16 @@ sub main {
   
   $$options{level} = $$model{bounds}[2] unless $$options{level};
   
-  my $v;
   open IN,'<',join('/',dirname($$options{model}),$$model{filepath});
   foreach (0..$$model{shape}[0]-1) {
     read IN,$expr,4*$$model{shape}[1];
-    $$v[$_] = [unpack "f$$model{shape}[1]",$expr];
+    $$model{speed}[$_] = [unpack "f$$model{shape}[1]",$expr];
   }
   close IN;
   
-  $$model{speed} = $v;
-  
-  my $x = [map { $$model{increments}[0]*$_+$$model{bounds}[0] } 0..$$model{shape}[0]-1];
-  my $z = [map { $$model{increments}[1]*$_+$$model{bounds}[2] } 0..$$model{shape}[1]-1];
-  
-  $v = new BSplines::Surface($x,$z,$v,$$model{shape}[0],$$model{shape}[1],3,3);
+  $$model{x} = [map { $$model{increments}[0]*$_+$$model{bounds}[0] } 0..$$model{shape}[0]-1];
+  $$model{z} = [map { $$model{increments}[1]*$_+$$model{bounds}[2] } 0..$$model{shape}[1]-1];
+  $$model{v} = new BSplines::Surface($$model{x},$$model{z},$$model{speed},$$model{shape}[0],$$model{shape}[1],3,3);
   
   my $image = {
       bounds => [map { 1.0*$_ } split(/,/,$$options{bounds})],
@@ -120,31 +154,23 @@ sub main {
       filepath => basename($$options{output}),
     };
   
-  $$image{'first arrivals'}{positions} = $x;
+  $$image{'first arrivals'}{positions} = $$model{x};
   
   $$image{shape} = [int(($$image{bounds}[1]-$$image{bounds}[0])/$$image{increments}[0])+1,
       int(($$image{bounds}[3]-$$image{bounds}[2])/$$image{increments}[1])+1];
   
-  my $eikonal = new Modeling::Eikonal($model);
-
-  foreach my $ix (0..$$image{shape}[0]-1) {
-    my $source;
-    $$source[0] = $$image{bounds}[0]+$$image{increments}[0]*$ix;
-    foreach my $iz (0..$$image{shape}[1]-1) {
-      my $index = $ix*$$image{shape}[1]+$iz;
-      $$source[1] = $$image{bounds}[2]+$$image{increments}[1]*$iz;
-      $eikonal->solve($source);
-      my $t = $$model{time};
-      $t = new BSplines::Surface($x,$z,$t,$$model{shape}[0],$$model{shape}[1],3,3);
-      my $fa = new Modeling::FirstArrival($v,$t);
-      my $receivers = [map { [$_,$$options{level}] } @$x];
-      ($$image{'first arrivals'}{traveltimes}[$index],
-          $$image{'first arrivals'}{amplitudes}[$index]) = 
-              $fa->build($source,$receivers);
-      print ">> first arrival of source ($$source[0] m,$$source[1] m) built <<\n";
-    }
-  }
+  MCE::Map::init { max_workers => $$options{jobs}, chunk_size => 1 };
   
+  my @curves = mce_map { construct_curves $_,$image,$model,
+        $$options{level} } 0..$$image{shape}[0]*$$image{shape}[1]-1;
+  
+  MCE::Map::finish;
+  
+  foreach (0..$#curves) {
+  	$$image{'first arrivals'}{traveltimes}[$_] = $curves[$_][0];
+  	$$image{'first arrivals'}{amplitudes}[$_] = $curves[$_][1];
+  }
+
   open OUT,">$$options{output}";
   print OUT JSON->new->pretty(1)->encode($image);
   close OUT;

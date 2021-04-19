@@ -5,7 +5,6 @@ use warnings;
 
 use BSplines::Surface;
 use Modeling::Eikonal;
-use MCE::Map;
 
 use Exporter;
 
@@ -84,7 +83,7 @@ sub compute_amplitude {
 sub build {
 	my ($self,$s,$r) = @_;
 	my $time = [map { $$self{t}->evaluate($$_[0],$$_[1]) } @$r];
-	my $ampl = [mce_map { $self->compute_amplitude($$r[$_],$$time[$_]) } 0..$#$r];
+	my $ampl = [map { $self->compute_amplitude($$r[$_],$$time[$_]) } 0..$#$r];
 	return ($time,$ampl);
 }
 
